@@ -1,0 +1,401 @@
+<!DOCTYPE HTML>
+<html>
+	<head>
+		<title>GlassTrack</title>
+		<meta name="viewport" id="viewport" content="target-densitydpi=device-dpi,user-scalable=no,width=device-width" />
+	</head>
+	<body bgcolor="#ffffff" onload="pageLoaded();">
+		<script src="http://ajax.googleapis.com/ajax/libs/jquery/1.10.2/jquery.min.js"></script>
+		<script src="http://106.187.52.148:8010/socket.io/socket.io.js"></script>
+		<script type="text/javascript">
+
+			var VERSION = "0.32";
+
+			var socket = null;
+			var users = null;
+			var map = null;
+
+			console.log("version: " + VERSION);
+
+			function pageLoaded() {
+				setupConnectionToServer();
+			}
+
+			function loadMapApiFinished() {
+				console.log("Map api finished loading");
+				var mapOptions = {
+					center: new google.maps.LatLng(0 /*myLat*/, 0 /*myLng*/),
+					zoom: 4,
+					mapTypeControl: false,
+					streetViewControl: true,
+					draggable: true,
+					mapTypeId: google.maps.MapTypeId.ROADMAP
+				};
+
+				map = new google.maps.Map(document.getElementById("map-canvas"),
+					mapOptions);
+			}
+
+			function setupConnectionToServer() {
+				if (typeof io === 'undefined') {
+    				console.log("io is undefined");
+				}
+    			else {
+					console.log("Attempting to connect to server");
+
+					socket = io.connect('http://106.187.52.148:8010');
+
+					console.log("Returned from io.connect   socket="+socket);
+	    		}
+
+				if (socket != null) {
+					socket.on('coordinates', function (data) {
+						console.log("Got all coordinates for name " + data.name + ". num coords: " + data.coordinates.length);
+						if (users) {
+							for (var i=0; i<users.length; i++) {
+								if (users[i].name == data.name) {
+									//users.coordinates = data.coordinates;
+									
+									if (users[i].polyline != undefined) {
+										users[i].polyline.setMap(null);
+										users[i].polyline = null;
+
+										users[i].polygon = new Array();
+									}
+									
+									if (users[i].marker != undefined) {
+										users[i].marker.setMap(null);
+										users[i].marker = null;
+									}
+
+									if (data.coordinates.length > 0) {
+										users[i].polygon = new Array();
+										for (var j=0; j<data.coordinates.length; j++) {
+
+											var newLocation;
+
+											newLocation = new google.maps.LatLng(	data.coordinates[j].latitude, data.coordinates[j].longitude );
+
+											users[i].polygon[j] = newLocation;
+
+										}
+
+								  		users[i].polyline = new google.maps.Polyline({	map: map,
+																					path: users[i].polygon,
+																					strokeColor: "FF6666",
+																					strokeOpacity: 1.0,
+																					strokeWeight: 2,
+																					clickable: false});
+
+										users[i].marker = new google.maps.Marker({	map: map,
+																				position: users[i].polygon[users[i].polygon.length-1],
+																				draggable: false,
+																				animation: google.maps.Animation.DROP
+										});
+
+										map.setCenter(users[i].polygon[users[i].polygon.length-1]);
+									}
+									break;
+								}
+							}
+						}
+					});
+
+					socket.on('coordinate', function (data) {
+						console.log("Got one coordinate update for name " + data.name);
+						if (users) {
+							for (var i=0; i<users.length; i++) {
+								if (users[i].name == data.name) {
+								
+									var newLocation;
+
+									newLocation = new google.maps.LatLng(	data.coordinate.latitude, data.coordinate.longitude );
+
+									if (users[i].polyline) {
+										var path = users[i].polyline.getPath();
+										path.push(newLocation);
+										if (users[i].marker) {
+											users[i].marker.setPosition(newLocation);
+										}
+									} else {
+										users[i].polygon = new Array();
+										users[i].polygon[0] = newLocation;
+								  		users[i].polyline = new google.maps.Polyline({	map: map,
+																					path: users[i].polygon,
+																					strokeColor: "FF6666",
+																					strokeOpacity: 1.0,
+																					strokeWeight: 2,
+																					clickable: false});
+
+										users[i].marker = new google.maps.Marker({	map: map,
+																				position: users[i].polygon[users[i].polygon.length-1],
+																				draggable: false,
+																				animation: google.maps.Animation.DROP});
+																				
+										map.setCenter(users[i].polygon[users[i].polygon.length-1]);
+									}
+									
+									// Update labels that tell the distance and speed.
+									
+									var label = document.getElementById("distance"+i);
+									if (label) {
+										label.innerHTML = data.totalDistanceMoved + " m";
+									}
+									
+									label = document.getElementById("speed"+i);
+									if (label) {
+										label.innerHTML = data.speed + " m/s";
+									}
+									
+									break;
+								}
+							}
+						}
+					});
+
+					socket.on('removePointOfInterest', function (data) {
+						console.log("got removePointOfInterest message from server");
+						console.log("POI index " + data.index);
+						console.log("name " + data.name);
+						for (var i=0; i<users.length; i++) {
+							if (users[i].name == data.name) {
+								console.log("Found the name");
+								console.log("poiMarkers.length " + users[i].poiMarkers.length);
+								users[i].poiMarkers[data.index].setMap(null);
+								users[i].poiMarkers[data.index] = null;
+								for (var j=data.index; j<users[i].poiMarkers.length-1; j++) {
+									users[i].poiMarkers[j] = users[i].poiMarkers[j+1];
+								}
+								users[i].poiMarkers.length--;
+								break;
+							}
+						}		
+					});
+
+					socket.on('error', function (data) {
+						alert(data.type);
+					});
+
+					socket.on('authenticationUrl', function (data) {
+				//		alert("Please visit this url for authentication: " + data.url);
+						var subWindow = window.open(data.url, 'Authenticate', 'height=400,width=620, top=200 left=300');
+						if (window.focus) {
+							subWindow.focus();
+						}
+					});
+
+					socket.on('userList', function (data) {
+						console.log("Got user list from the server. There are " + data.users.length + " users:");
+
+						var myNode = document.getElementById("ul_users");
+						while (myNode.firstChild) {
+							myNode.removeChild(myNode.firstChild);
+						}
+
+						users = data.users;
+
+						for (var i=0; i<data.users.length; i++) {
+							console.log("" + i + " " + data.users[i].name);
+
+							$("#ul_users").append('<li><label>' + data.users[i].name + '</label>   <label id="distance"'+i+'>0 m</label> , <label id="speed"'+i+'>0 m/s</label>  <input type="checkbox" id="track"'+i+' onclick="checkboxTrackClick(this, '+i+');">Tracking   <input type="checkbox" id="track"'+i+' onclick="checkboxPushSpeedInfoClick(this, '+i+');" checked>Push Speed Info  <button id="btnReset"' + i + 'class="btn" onclick="resetClick('+i+');">Reset</button><button id="btnDelete"' + i + 'class="btn" onclick="deleteClick('+i+');">Delete</button><button id="btnPoint"' + i + 'class="btn" onclick="pointClick('+i+');">Create POI</button></li>');
+
+							socket.emit('startFollowing', {name: data.users[i].name});
+							
+							users[i].poiMarkers = new Array();
+						}
+					});
+					
+					console.log("Now ask for the user list");
+					socket.emit('getUserList');
+				}
+			}
+
+			function getName() {
+				var textBox = document.getElementById("textbox");
+				if (textBox) {
+					console.log("name: " + textBox.value);
+					return textBox.value;
+				}
+			}
+
+			function resetClick(index) {
+				if (socket && users) {
+					socket.emit('clearCoordinates', {name: users[index].name});
+					socket.emit('getCoordinates', {name: users[index].name});
+				}
+			}
+
+			function deleteClick(index) {
+				if (socket && users) {
+					socket.emit('removeUser', {name: users[index].name});
+
+					if (users[index].polyline != undefined) {
+						users[index].polyline.setMap(null);
+						users[index].polyline = null;
+						users[index].polygon = new Array();
+					}
+									
+					if (users[index].marker != undefined) {
+						users[index].marker.setMap(null);
+						users[index].marker = null;
+					}
+
+					if (users[index].poiMarkers) {
+						for (var i=0; i<users[index].poiMarkers.length; i++) {
+							users[index].poiMarkers[i].setMap(null);
+							users[index].poiMarkers[i] = null;
+						}
+					}
+					users[index].poiMarkers = new Array();
+
+					socket.emit('getUserList');
+				}
+			}
+
+			function registerButtonClicked() {
+				var currName = prompt("Please enter your name:", "");
+				if (currName == "") {
+					alert("Invalid name");
+				} else if (socket) {
+					socket.emit('authenticate', {name: currName});
+				}
+			}
+
+			function checkboxTrackClick(checkbox, i) {
+				if (socket) {
+					if (checkbox.checked) {
+						console.log("Ask to start tracking " + users[i].name);
+						socket.emit('startTracking', {name: users[i].name });
+					} else {
+						console.log("Ask to stop tracking " + users[i].name);
+						socket.emit('stopTracking', {name: users[i].name });					
+					}
+				}
+			}
+			
+			function checkboxPushSpeedInfoClick(checkbox, i) {
+				if (socket) {
+					if (checkbox.checked) {
+						console.log("Ask to start pushing speed info " + users[i].name);
+						socket.emit('startPushingSpeedInfoToGlass', {name: users[i].name });
+					} else {
+						console.log("Ask to stop pushing speed info " + users[i].name);
+						socket.emit('stopPushingSpeedInfoToGlass', {name: users[i].name });					
+					}
+				}
+			}
+
+			function pointClick(index) {
+				var message = prompt("Enter a message for this POI", "");
+				if (users[index].poiMarkers == undefined) {
+					users[index].poiMarkers = new Array();
+				}
+				var userLocation = users[index].polygon[users[index].polygon.length-1];
+				var lat;
+				var lng;
+
+				lat = userLocation.lat() + 1;
+				lng = userLocation.lng();
+
+				var poiLocation = new google.maps.LatLng(lat, lng);
+
+				var radius = 130;
+
+				var circleOptions = {
+					draggable: true,
+					editable: true,
+					strokeColor: '#555555',
+					strokeOpacity: 0.8,
+					strokeWeight: 2,
+					fillColor: '#FFAAAA',
+					fillOpacity: 0.35,
+					map: map,
+					center: poiLocation,
+					radius: radius	// meters
+				};
+				var circle = new google.maps.Circle(circleOptions);
+
+				circle.message = message;
+
+				google.maps.event.addListener(circle, 'center_changed', function() {
+					var newPos = circle.getCenter();
+					var newLat = newPos.lat();
+					var newLng = newPos.lng();
+
+					var index = 0;
+					for (var i=0; i<users[index].poiMarkers.length; i++) {
+						if (users[index].poiMarkers[i] == circle) {
+							index = i;
+							break;
+						}
+					}
+
+					if (socket) {
+						socket.emit('movePointOfInterest', {	name: users[index].name,
+																lat: newLat,
+																lng: newLng,
+																index: index});
+					}
+				});
+
+				google.maps.event.addListener(circle, 'radius_changed', function() {
+					var radius = circle.getRadius();
+
+					console.log("Radius changed");
+
+					var index = 0;
+					for (var i=0; i<users[index].poiMarkers.length; i++) {
+						if (users[index].poiMarkers[i] == circle) {
+							index = i;
+							console.log("poi index " + index);
+							break;
+						}
+					}
+
+					if (socket) {
+						console.log("Tell server setPointOfInterestRadius");
+						socket.emit('setPointOfInterestRadius', {	name: users[index].name,
+																	radius: radius,
+																	index: index});
+					}
+				});
+
+				google.maps.event.addListener(circle, 'rightclick', function(event) {
+					var index = 0;
+					for (var i=0; i<users[index].poiMarkers.length; i++) {
+						if (users[index].poiMarkers[i] == circle) {
+							index = i;
+							for (j=0; j<users[i].poiMarkers.length-1; j++) {
+								users[i].poiMarkers[j] = users[i].poiMarkers[j+1];
+							}
+							users[i].poiMarkers.length--;
+							break;
+						}
+					}
+
+					if (socket) {
+						socket.emit('removePointOfInterest', {	name: users[index].name,
+																index: index});
+					}
+				});
+
+				users[index].poiMarkers[users[index].poiMarkers.length] = circle;
+
+				if (socket) {
+					socket.emit('addPointOfInterest', {	name: users[index].name,
+														lat: lat,
+														lng: lng,
+														radius: radius,
+														message: message});
+				}
+			}
+			
+		</script>
+		<div id="map-canvas" style="background:white; width: 100%; height: 300px"></div>
+		<div id="users"></div>
+		<ul id="ul_users"></ul>
+		<button class="btn" onclick="registerButtonClicked()">Register Me</button>
+		</body>
+	<script src="https://maps.googleapis.com/maps/api/js?libraries=geometry&key=AIzaSyDcsM7LAO5dRSMWAeeSy056bl5EuWEZUQQ&sensor=false&callback=loadMapApiFinished"></script>
+</html>
+
